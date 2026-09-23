@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project(lru_cache
-    VERSION 1.0.0
+    VERSION 1.0.1
     DESCRIPTION "Header-only thread-safe LRU cache with optional TTL"
     HOMEPAGE_URL "https://github.com/LinkaiQi/LRUCache"
     LANGUAGES CXX)

@@ -87,7 +87,7 @@ The library is header-only. Copy `include/lru/` into your project and add
 include(FetchContent)
 FetchContent_Declare(lru_cache
     GIT_REPOSITORY https://github.com/LinkaiQi/LRUCache.git
-    GIT_TAG v1.0.0)
+    GIT_TAG v1.0.1)
 FetchContent_MakeAvailable(lru_cache)
 
 target_link_libraries(your_target PRIVATE lru::lru_cache)
