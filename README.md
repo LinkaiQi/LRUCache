@@ -19,14 +19,39 @@ if (auto name = cache.get("user:42")) {
 }
 ```
 
-* **O(1)** `get` and `put`, using an intrusive linked list plus a hash map
-* **Thread-safe**: every operation is locked, and verified under ThreadSanitizer
-* **Atomic compound operations**: `insert_if_absent`, `get_or_compute`
-* **Optional TTL**: per-cache default, per-entry override, injectable clock
-* **No hidden threads** and no allocations on the hot path
-* **Tested**: 105 tests, ~27k assertions, ASan + UBSan + TSan + leak-checked in CI
+* **O(1)** `get` and `put`
+* **Thread-safe**, verified under ThreadSanitizer
+* **Atomic** `insert_if_absent` and `get_or_compute`
+* **Optional TTL** with an injectable clock
+* **No hidden threads**, no dependencies
 
-## Try it in 30 seconds
+## Design
+
+```
+        map:  key ──► Node*
+                       │
+  head ◄──► Node ◄──► Node ◄──► Node ◄──► tail
+  (MRU)                                  (LRU, evicted first)
+```
+
+A doubly linked list tracks recency and an `unordered_map` maps a key to its
+node, so moving an entry to the front is pure pointer surgery, with no rehashing
+and no allocation. Nodes are owned exactly once and the map holds non-owning
+pointers.
+
+## Performance
+
+`make bench`, Apple M-series, clang 21, `-O2`, capacity 10,000, 2M operations,
+single-threaded.
+
+| workload | classic | production | delta |
+|---|---|---|---|
+| insert churn (every put evicts) | 30.9 ns/op | 20.7 ns/op | **33% faster** |
+| insert churn, 128-byte values | 44.3 ns/op | 31.4 ns/op | **29% faster** |
+| hot reads (every get hits) | 10.6 ns/op | 9.6 ns/op | 10% faster |
+| mixed 30% write / 70% read | 40.4 ns/op | 35.0 ns/op | 13% faster |
+
+## Try it
 
 Linux and macOS:
 
@@ -35,7 +60,7 @@ git clone https://github.com/LinkaiQi/LRUCache && cd LRUCache
 make run
 ```
 
-Windows, where `make` is not available, so build with CMake instead:
+Windows, where `make` is not available:
 
 ```powershell
 git clone https://github.com/LinkaiQi/LRUCache
@@ -45,13 +70,11 @@ cmake --build build --config Release
 .\build\Release\cache_shell.exe
 ```
 
-Either way you get an interactive shell, so you can play with the cache without
+Either way you get an interactive shell, so you can try the cache without
 writing any code:
 
 ```
 lru> put a 1
-OK
-lru> put b 2
 OK
 lru> get a
 1
@@ -61,27 +84,11 @@ lru> stats
 hits=1 misses=0 evictions=0 expirations=0
 ```
 
-It reads piped input too, which makes it easy to script:
+Type `help` inside the shell for the full command list.
 
-```sh
-printf 'put session abc 50\nhas session\nstats\n' | ./build/cache_shell 100
-```
+## Install
 
-```powershell
-"put session abc 50", "has session", "stats" | .\build\Release\cache_shell.exe 100
-```
-
-Pass `<capacity> <default_ttl_ms>` to configure the cache, and type `help`
-inside the shell for the full command list.
-
-## Installing
-
-### Copy the header
-
-The library is header-only. Copy `include/lru/` into your project and add
-`include/` to your include path. Nothing else is required.
-
-### CMake with FetchContent
+Copy `include/lru` into your project, or use CMake.
 
 ```cmake
 include(FetchContent)
@@ -93,20 +100,16 @@ FetchContent_MakeAvailable(lru_cache)
 target_link_libraries(your_target PRIVATE lru::lru_cache)
 ```
 
-### CMake with an installed package
+Or install it first and use `find_package`:
 
 ```sh
-cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/usr/local
-cmake --install build
+cmake -S . -B build && cmake --install build
 ```
 
 ```cmake
 find_package(lru_cache 1.0 REQUIRED)
 target_link_libraries(your_target PRIVATE lru::lru_cache)
 ```
-
-Both paths are exercised in CI, so a broken package is a failing build rather
-than a surprise for you.
 
 ## API
 
@@ -124,24 +127,22 @@ class lru::LRUCache;
 | `put(key, value [, ttl])` | most recently used | inserts or updates, evicting the LRU entry when full |
 | `insert_if_absent(key, value [, ttl])` | most recently used | atomic, returns `true` if inserted |
 | `get_or_compute(key, factory [, ttl])` | most recently used | computes on miss, factory runs **without** the lock |
-| `get(key)` | most recently used | `std::optional<Value>`; counts a hit or miss |
+| `get(key)` | most recently used | returns `std::optional<Value>` |
 | `peek(key)` | unchanged | read without disturbing LRU order or statistics |
 | `contains(key)` | unchanged | membership test |
 | `erase(key)` | n/a | returns `true` if an entry was removed |
 | `clear()` | n/a | drops all entries, keeps capacity |
 | `purge_expired()` | n/a | drops expired entries, returns how many |
-| `size()` `capacity()` `empty()` | n/a | `size()` includes expired-but-unpurged entries |
+| `size()` `capacity()` `empty()` | n/a | `size()` includes expired entries not yet purged |
 | `default_ttl()` | n/a | the cache's default TTL, if any |
 | `stats()` `reset_stats()` | n/a | hits, misses, evictions, expirations |
 
-`get` and `peek` return **by value**. Returning a reference or pointer would be
-a dangling-pointer bug waiting to happen: once the lock is released, another
-thread can evict the entry out from under the caller.
+`get` and `peek` return **by value**. A reference would dangle as soon as
+another thread evicted the entry.
 
 ## TTL
 
-TTL is opt-in. A cache with no TTL never reads the clock, so you pay nothing for
-a feature you do not use.
+Opt-in. A cache with no TTL never reads the clock.
 
 ```cpp
 using namespace std::chrono_literals;
@@ -155,72 +156,39 @@ cache.put("config", blob, std::nullopt);     // never expires
 cache.purge_expired();                       // reclaim entries nobody read again
 ```
 
-**Expiration is lazy.** An entry expires logically the moment its deadline
-passes, and `get`, `peek` and `contains` all report it as absent right away.
-Its memory is only reclaimed when it is read, evicted, or purged. There is no
-background thread, so cleanup never happens behind your back. Call
-`purge_expired()` if you need the memory back on a schedule you control.
+Expiry is lazy. An entry is reported as absent the moment its deadline passes,
+but its memory is only reclaimed when it is read, evicted or purged. There is no
+background thread, so cleanup never happens behind your back.
 
-A non-positive TTL throws `std::invalid_argument` rather than silently storing
-an entry that is already dead.
-
-### Testing code that uses TTL
-
-`Clock` is a template parameter, so you can drive expiry by hand instead of
-sleeping in your tests:
-
-```cpp
-struct ManualClock {
-    using duration   = std::chrono::milliseconds;
-    using rep        = duration::rep;
-    using period     = duration::period;
-    using time_point = std::chrono::time_point<ManualClock, duration>;
-    static constexpr bool is_steady = true;
-
-    static time_point now() noexcept { return s_now; }
-    static void advance(duration by) { s_now += by; }
-    static time_point s_now;
-};
-
-lru::LRUCache<int, std::string, std::hash<int>, std::equal_to<int>, ManualClock> cache(8, 100ms);
-cache.put(1, "one");
-ManualClock::advance(101ms);
-assert(!cache.get(1));       // no sleeping, fully deterministic
-```
-
-The default is `std::chrono::steady_clock`, which is monotonic and therefore
-immune to wall-clock adjustments.
+`Clock` is a template parameter, so tests can drive expiry by hand instead of
+sleeping. `tests/test_lru_cache_ttl.cpp` has a manual clock to copy.
 
 ## Thread safety
 
-Every public method is safe to call concurrently. The suite hammers the cache
-from 8 threads under ThreadSanitizer in CI.
+Every public method is safe to call concurrently. A `std::shared_mutex` would
+buy nothing, because `get` updates the recency order and therefore mutates the
+cache as much as `put` does.
 
-A `std::shared_mutex` would buy nothing here, because `get` updates the recency
-order and therefore mutates the cache as much as `put` does. If lock contention
-shows up in a profile, shard the key space across N independent caches rather
-than trying to make one cache lock-free.
-
-**Compound operations built from separate calls are still races.** This is a bug
-no amount of internal locking can fix:
+Compound operations built from separate calls are still races, and no amount of
+internal locking can fix that:
 
 ```cpp
-if (!cache.contains(key)) {          // thread A and thread B can both get here
-    cache.put(key, expensive());     // ...and both compute and both write
+if (!cache.contains(key)) {          // two threads can both get here
+    cache.put(key, expensive());     // and both compute, and both write
 }
 ```
 
-Use the atomic operations instead:
+Use the atomic versions instead:
 
 ```cpp
 cache.insert_if_absent(key, value);                     // exactly one winner
 auto value = cache.get_or_compute(key, [] { ... });     // compute on miss
 ```
 
-`get_or_compute` runs the factory **without** holding the lock, so a slow
-factory never blocks other threads and may safely call back into the same
-cache. The trade-off is explicit: concurrent callers may each compute a value
-for the same key, the first to finish wins, and the others discard their work.
+`get_or_compute` runs the factory without holding the lock, so a slow factory
+never blocks other threads and may safely call back into the same cache.
+Concurrent callers may each compute a value for the same key, the first to
+finish wins, and the others discard their work.
 
 Move construction and move assignment are *not* thread-safe. Like any standard
 container, do not move a cache other threads are using.
@@ -230,86 +198,39 @@ container, do not move a cache other threads are using.
 | Situation | Behaviour |
 |---|---|
 | Key missing or expired | `std::nullopt`, not an exception |
-| Capacity of zero | `std::invalid_argument` from the constructor |
-| Non-positive TTL | `std::invalid_argument`, thrown before anything is locked or modified |
-| `Key`/`Value` constructor or assignment throws | propagated, the cache stays consistent |
+| Capacity of zero | `std::invalid_argument` |
+| Non-positive TTL | `std::invalid_argument`, before anything is modified |
+| `Key` or `Value` throws | propagated, the cache stays consistent |
 | Allocation failure | propagated, nothing is leaked |
 
-Operations provide the **basic guarantee**: the map and the list always agree,
-so the cache is never left corrupt. A `put` that throws may have already evicted
-the least recently used entry. The map is reserved to capacity up front, so
-insertions do not rehash. `Hash` and `KeyEqual` are assumed not to throw.
+Operations give the basic guarantee. The map and the list always agree, so the
+cache is never left corrupt.
 
 ## Two versions
 
 | | `lru/lru_cache_classic.hpp` | `lru/lru_cache.hpp` |
 |---|---|---|
-| | **classic** | **production** |
 | Structure | standalone `LinkedList` class | list folded into the cache |
-| Types | concrete `int` → `std::string` | templated |
+| Types | concrete `int` to `std::string` | templated |
 | API | `put`, `get` | the full table above |
 | TTL | no | yes |
-| Eviction | frees the node, allocates a new one | recycles the node |
-| Best for | reading and understanding the algorithm | shipping |
+| Best for | reading the algorithm | shipping |
 
-The classic version exists to be read. It keeps the shape of a textbook
-implementation, where the recency list is its own class with
-`CreateNode`/`add_first`/`remove_last`. It is correct, leak-free and
-thread-safe, just smaller in scope. Both versions are registered against the
-same conformance suite, which is what guarantees they behave identically rather
-than merely similarly.
-
-## Design
-
-```
-        map:  key ──► Node*
-                       │
-  head ◄──► Node ◄──► Node ◄──► Node ◄──► tail
-  (MRU)                                  (LRU, evicted first)
-```
-
-A doubly linked list tracks recency and an `unordered_map` maps a key to its
-node, so moving an entry to the front is pure pointer surgery, with no
-rehashing and no allocation. Nodes are owned exactly once, and the map holds non-owning pointers.
-
-## Performance
-
-`make bench`, Apple M-series, clang 21, `-O2`, capacity 10,000, 2M operations,
-single-threaded (so this measures the data structure, not lock contention):
-
-| workload | classic | production | delta |
-|---|---|---|---|
-| insert churn (every put evicts) | 30.9 ns/op | 20.7 ns/op | **33% faster** |
-| insert churn, 128-byte values | 44.3 ns/op | 31.4 ns/op | **29% faster** |
-| hot reads (every get hits) | 10.6 ns/op | 9.6 ns/op | 10% faster |
-| mixed 30% write / 70% read | 40.4 ns/op | 35.0 ns/op | 13% faster |
-
-The insert gap is node recycling: at capacity the production cache reuses the
-evicted node instead of freeing it and allocating a replacement, which removes
-one `free` and one `malloc` per insertion and lets the old value reuse its own
-storage. A `std::string` keeps its buffer, so the 128-byte case avoids a second
-allocation too. Run-to-run variance is a few percent, so re-run the benchmark on
-your own hardware rather than trusting this table.
+The classic version exists to be read. Both are checked against the same
+conformance suite, so they behave identically.
 
 ## Building
 
-The Makefile is the quickest route on Linux and macOS.
-
 ```sh
-make test      # build and run every test suite
-make run       # interactive cache shell
-make examples  # build and run the examples
-make bench     # classic vs production benchmark
-make asan      # tests under AddressSanitizer
-make ubsan     # tests under UndefinedBehaviorSanitizer
-make tsan      # tests under ThreadSanitizer
-make leaks     # leak check (macOS `leaks`, LeakSanitizer elsewhere)
-make check     # everything CI runs
-make help      # this list
+make test   # build and run every test suite
+make run    # interactive cache shell
+make bench  # classic against production benchmark
+make check  # everything CI runs, including the sanitizers and a leak check
+make help   # the full list
 ```
 
 CMake works everywhere, and is the only option on Windows because the Makefile
-relies on a POSIX shell.
+needs a POSIX shell:
 
 ```sh
 cmake -S . -B build
@@ -317,83 +238,24 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Everything compiles clean under `-Wall -Wextra -Wpedantic -Wshadow -Wconversion
--Wsign-conversion -Wold-style-cast -Werror` with GCC and Clang, and under
-`/W4 /WX /permissive-` with MSVC.
-
-## Supported platforms
-
-Every push is built and tested on Linux, macOS and Windows.
-
-| Platform | Compiler | Covered by CI |
-|---|---|---|
-| Linux | GCC or Clang | build, tests, ASan, UBSan, TSan, leak check |
-| macOS | AppleClang | build, tests, ASan, UBSan, TSan, leak check |
-| Windows | MSVC | build and tests through CMake and CTest |
-
-The headers include a regression test for the `min` and `max` macros that
-`<windows.h>` defines unless `NOMINMAX` is set, so including this library after
-`<windows.h>` compiles cleanly. That test runs on every platform.
+CI builds and tests on Linux, macOS and Windows. Linux and macOS also run
+AddressSanitizer, UndefinedBehaviorSanitizer, ThreadSanitizer and a leak check.
 
 ## Tests
 
-Self-contained, with no test framework to install. 105 tests and about 27,500
-assertions, split one binary per concern.
+105 tests with no test framework to install, one binary per concern in `tests/`.
+Three are worth knowing about:
 
-| Suite | Covers |
-|---|---|
-| `test_lru_cache_basics.cpp` | reading, writing, recency, eviction |
-| `test_lru_cache_removal.cpp` | erase at head, tail, middle and only entry, and clear |
-| `test_lru_cache_atomic_ops.cpp` | `insert_if_absent` and `get_or_compute` |
-| `test_lru_cache_ttl.cpp` | expiry, per-entry overrides, purging |
-| `test_lru_cache_stats.cpp` | hit, miss, eviction and expiration counters |
-| `test_lru_cache_value_semantics.cpp` | what gets copied, moved and destroyed, and moving the cache |
-| `test_lru_cache_error_handling.cpp` | rejected arguments and exception safety |
-| `test_lru_cache_concurrency.cpp` | everything under threads |
-| `test_lru_cache_portability.cpp` | the `min` and `max` macros from `<windows.h>` |
-| `test_lru_cache_conformance.cpp` | the shared suite, run against both caches |
-| `test_lru_cache_classic.cpp` | the classic cache and its `LinkedList` |
+* **conformance** runs a single suite against both caches, including 20,000
+  random operations diffed against a deliberately naive reference LRU.
+* **concurrency** releases 8 workers through a start gate so the operations
+  really overlap, covering racing `get_or_compute`, `erase` and `clear` against
+  live traffic, and counters that have to add up exactly.
+* **error handling** throws from every copy and move an insert performs, then
+  checks that the cache is still consistent and that nothing leaked.
 
-Three are worth calling out.
-
-**`test_lru_cache_conformance.cpp`** runs one suite against both caches, which
-is what guarantees they are observably identical rather than merely similar. It
-includes `randomized_operations_match_reference_model`, 20,000 random operations
-diffed against a deliberately naive vector-based LRU, which catches the subtly
-wrong pointer update that hand-written examples miss.
-
-**`test_lru_cache_concurrency.cpp`** releases its workers through a start gate so
-the operations genuinely overlap instead of the first thread finishing before
-the last one starts. It covers racing `get_or_compute` calls on a single key,
-factories that re-enter the cache, `erase` and `clear` running against live
-traffic, a hot key set that keeps `move_to_front` reordering the list, and
-counters that have to add up exactly.
-
-**`test_lru_cache_error_handling.cpp`** turns the documented exception guarantee
-into something testable. A `ThrowingValue` throws from whichever copy or move a
-countdown lands on, so the trip point walks through every step of an insert,
-including the node recycling path taken when the cache is full. After each one
-the suite checks that the map and the list still agree, that no key ended up
-holding another key's value, that the cache still works, and that no value
-instance leaked.
-
-The concurrency and error handling suites were both validated against
-deliberately broken builds. Removing the lock from `get()` produces an immediate
-ThreadSanitizer race report, and removing the `delete` from the recycling catch
-block makes the leak check fail. They fail when the code is wrong rather than
-passing by luck.
-
-## Layout
-
-| Path | Purpose |
-|---|---|
-| `include/lru/lru_cache.hpp` | the production cache |
-| `include/lru/lru_cache_classic.hpp` | the classic, readable version |
-| `include/lru/version.hpp` | version macros and `lru::Version` |
-| `examples/` | quickstart, TTL walkthrough, interactive shell |
-| `tests/` | one suite per concern, plus the shared harness and conformance suite |
-| `benchmarks/` | comparison benchmark |
-| `cmake/` | package config template |
+The concurrency and error handling suites were validated against deliberately
+broken builds, so they fail when the code is wrong rather than passing by luck.
 
 ## License
 
