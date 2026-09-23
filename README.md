@@ -4,6 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 [![header-only](https://img.shields.io/badge/header--only-yes-brightgreen.svg)](include/lru)
+[![Try it online](https://img.shields.io/badge/try%20it-online-ff69b4.svg)](https://godbolt.org/z/aob3xfK77)
 
 A thread-safe, fixed-capacity LRU cache for C++17 with optional per-entry TTL.
 Header-only, no dependencies.
@@ -53,25 +54,16 @@ single-threaded.
 
 ## Try it
 
-Linux and macOS:
+**[Run it in your browser.](https://godbolt.org/z/aob3xfK77)** Nothing to
+install. Edit the demo, press Run, see the output.
+
+Locally you get an interactive shell instead, so you can poke at a live cache
+without writing any code:
 
 ```sh
 git clone https://github.com/LinkaiQi/LRUCache && cd LRUCache
 make run
 ```
-
-Windows, where `make` is not available:
-
-```powershell
-git clone https://github.com/LinkaiQi/LRUCache
-cd LRUCache
-cmake -S . -B build
-cmake --build build --config Release
-.\build\Release\cache_shell.exe
-```
-
-Either way you get an interactive shell, so you can try the cache without
-writing any code:
 
 ```
 lru> put a 1
@@ -84,7 +76,14 @@ lru> stats
 hits=1 misses=0 evictions=0 expirations=0
 ```
 
-Type `help` inside the shell for the full command list.
+Type `help` inside the shell for the full command list. On Windows, where `make`
+is not available, build it with CMake first:
+
+```powershell
+cmake -S . -B build
+cmake --build build --config Release
+.\build\Release\cache_shell.exe
+```
 
 ## Install
 
@@ -256,6 +255,10 @@ Three are worth knowing about:
 
 The concurrency and error handling suites were validated against deliberately
 broken builds, so they fail when the code is wrong rather than passing by luck.
+
+`tools/make_online_demo.py` regenerates the browser demo link from the current
+header. It refuses to publish a link unless the demo builds without diagnostics
+and prints exactly the expected output.
 
 ## License
 
