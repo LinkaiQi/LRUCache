@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / ${{ matrix.sanitizer }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        sanitizer: [none, address, undefined, thread]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and test
+        run: |
+          case "${{ matrix.sanitizer }}" in
+            none)      make test ;;
+            address)   make asan ;;
+            undefined) make ubsan ;;
+            thread)    make tsan ;;
+          esac
+
+      - name: Examples
+        if: matrix.sanitizer == 'none'
+        run: make examples
+
+      - name: Cache shell smoke test
+        if: matrix.sanitizer == 'none'
+        run: printf 'put a 1\nget a\nstats\nquit\n' | ./build/cache_shell
+
+      - name: Leak check
+        if: matrix.sanitizer == 'none'
+        run: make leaks
+
+      - name: Benchmark
+        if: matrix.sanitizer == 'none'
+        run: make bench
+
+  cmake:
+    name: cmake build and ctest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure, build and test
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+
+  packaging:
+    name: install and consume via find_package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the library
+        run: |
+          cmake -S . -B build -DCMAKE_INSTALL_PREFIX="$PWD/staging" \
+                              -DLRU_CACHE_BUILD_TESTS=OFF \
+                              -DLRU_CACHE_BUILD_EXAMPLES=OFF \
+                              -DLRU_CACHE_BUILD_BENCHMARKS=OFF
+          cmake --install build
+
+      # A downstream project must be able to find and link the installed package.
+      - name: Consume it from a separate project
+        run: |
+          mkdir -p /tmp/consumer && cd /tmp/consumer
+          cat > CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.16)
+          project(consumer LANGUAGES CXX)
+          find_package(lru_cache 1.0 REQUIRED)
+          add_executable(consumer main.cpp)
+          target_link_libraries(consumer PRIVATE lru::lru_cache)
+          EOF
+          cat > main.cpp <<'EOF'
+          #include <lru/lru_cache.hpp>
+          #include <chrono>
+          #include <iostream>
+          int main() {
+              lru::LRUCache<int, std::string> cache(2, std::chrono::seconds(60));
+              cache.put(1, "ok");
+              std::cout << cache.get(1).value_or("<miss>") << "\n";
+              return cache.get(1) ? 0 : 1;
+          }
+          EOF
+          cmake -S . -B build -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/staging"
+          cmake --build build
+          ./build/consumer
+
+      # Consumers must get the library only, not our tests and examples.
+      - name: Consume it via add_subdirectory
+        run: |
+          mkdir -p /tmp/subdir && cd /tmp/subdir
+          cat > CMakeLists.txt <<EOF
+          cmake_minimum_required(VERSION 3.16)
+          project(subdir_consumer LANGUAGES CXX)
+          add_subdirectory($GITHUB_WORKSPACE lru_cache_build)
+          add_executable(app main.cpp)
+          target_link_libraries(app PRIVATE lru::lru_cache)
+          EOF
+          cp /tmp/consumer/main.cpp .
+          cmake -S . -B build
+          cmake --build build
+          ./build/app
