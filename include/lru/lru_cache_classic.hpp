@@ -9,6 +9,13 @@
 // node recycling, use lru_cache.hpp instead. The two are behaviourally identical
 // for put/get, and tests/conformance.hpp runs the same suite against both.
 //
+// O(1) put/get: the doubly linked list tracks recency (head = most recently
+// used, tail = least recently used) and the hash map gives constant time lookup
+// from key to node, so neither operation ever walks the list. This matches
+// lru_cache.hpp. The two differ only in the constant factor, because at
+// capacity this version frees the evicted node and allocates a new one where
+// lru_cache.hpp overwrites the evicted node in place.
+//
 // Ownership: LinkedList owns every node it holds and frees them in its
 // destructor. LRUCache::m_map holds non-owning pointers to those same nodes. A
 // node detached with remove_last() is handed back to the caller, which becomes
