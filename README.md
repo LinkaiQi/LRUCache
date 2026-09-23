@@ -24,7 +24,7 @@ if (auto name = cache.get("user:42")) {
 * **Atomic compound operations**: `insert_if_absent`, `get_or_compute`
 * **Optional TTL**: per-cache default, per-entry override, injectable clock
 * **No hidden threads** and no allocations on the hot path
-* **Tested**: 89 tests, ~27k assertions, ASan + UBSan + TSan + leak-checked in CI
+* **Tested**: 97 tests, ~27k assertions, ASan + UBSan + TSan + leak-checked in CI
 
 ## Try it in 30 seconds
 
@@ -337,7 +337,7 @@ The headers include a regression test for the `min` and `max` macros that
 
 ## Tests
 
-Self-contained, with no test framework to install. 89 tests, about 27,000
+Self-contained, with no test framework to install. 97 tests, about 27,000
 assertions.
 
 `tests/conformance.hpp` holds the behaviour every cache in this repository must
@@ -350,6 +350,18 @@ against it. Two entries are worth calling out:
   hand-written examples miss.
 * **`concurrent_access_is_safe`** hammers the cache from 8 threads under
   ThreadSanitizer.
+
+`tests/test_concurrency.cpp` goes further. Workers are released through a start
+gate so the operations genuinely overlap rather than the first thread finishing
+before the last one starts. It covers racing `get_or_compute` calls on one key,
+which must all agree on a single value, factories that re-enter the cache from
+many threads at once, `erase` and `clear` running against live readers and
+writers, a hot key set that keeps `move_to_front` reordering the list, and
+statistics that have to add up exactly across threads.
+
+These tests were checked against a deliberately broken build with the lock
+removed from `get()`. ThreadSanitizer reported the race immediately, so the
+suite fails when the locking is wrong rather than passing by luck.
 
 On top of that: TTL expiry driven by a manual clock (deterministic, no sleeps),
 `LinkedList` unit tests covering every insert and removal position, move
@@ -364,7 +376,7 @@ installs the library and consumes it from a separate project.
 | `include/lru/lru_cache_classic.hpp` | the classic, readable version |
 | `include/lru/version.hpp` | version macros and `lru::Version` |
 | `examples/` | quickstart, TTL walkthrough, interactive shell |
-| `tests/` | conformance suite, harness, per-version suites |
+| `tests/` | conformance suite, harness, per-version, TTL, concurrency and macro suites |
 | `benchmarks/` | comparison benchmark |
 | `cmake/` | package config template |
 
