@@ -49,8 +49,14 @@ single-threaded.
 |---|---|---|---|
 | insert churn (every put evicts) | 30.9 ns/op | 20.7 ns/op | **33% faster** |
 | insert churn, 128-byte values | 44.3 ns/op | 31.4 ns/op | **29% faster** |
-| hot reads (every get hits) | 10.6 ns/op | 9.6 ns/op | 10% faster |
-| mixed 30% write / 70% read | 40.4 ns/op | 35.0 ns/op | 13% faster |
+| mixed 30% write / 70% read | 40.4 ns/op | 35.0 ns/op | **13% faster** |
+| hot reads (every get hits) | 10.6 ns/op | 9.6 ns/op | no real difference |
+
+Both caches are O(1) for `get` and `put`. The insert gap is one fewer allocation
+and free per insertion, because at capacity the production cache overwrites the
+evicted node instead of freeing it and allocating a new one. Reads allocate
+nothing in either, and which one measures faster flips with the working set
+size, so treat that row as noise.
 
 ## Try it
 
