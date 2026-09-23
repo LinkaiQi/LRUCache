@@ -42,6 +42,22 @@ jobs:
         if: matrix.sanitizer == 'none'
         run: make bench
 
+  windows:
+    name: windows-latest / msvc
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure, build and test
+        run: |
+          cmake -S . -B build
+          cmake --build build --config Release --parallel
+          ctest --test-dir build -C Release --output-on-failure
+
+      - name: Cache shell smoke test
+        run: |
+          "put a 1", "get a", "stats", "quit" | .\build\Release\cache_shell.exe
+
   cmake:
     name: cmake build and ctest
     runs-on: ubuntu-latest

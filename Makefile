@@ -9,7 +9,8 @@ LDFLAGS ?= -pthread
 BUILD_DIR := build
 HEADERS := $(wildcard include/lru/*.hpp)
 TEST_DEPS := $(HEADERS) tests/test_harness.hpp tests/conformance.hpp
-TEST_SRCS := tests/test_lru_cache.cpp tests/test_lru_cache_classic.cpp tests/test_lru_cache_ttl.cpp
+TEST_SRCS := tests/test_lru_cache.cpp tests/test_lru_cache_classic.cpp \
+             tests/test_lru_cache_ttl.cpp tests/test_min_max_macros.cpp
 TEST_BINS := $(patsubst tests/%.cpp,$(BUILD_DIR)/%,$(TEST_SRCS))
 EXAMPLE_SRCS := $(wildcard examples/*.cpp)
 EXAMPLE_BINS := $(patsubst examples/%.cpp,$(BUILD_DIR)/%,$(EXAMPLE_SRCS))

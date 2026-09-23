@@ -307,21 +307,26 @@ private:
         }
     }
 
+    // The sentinel for "this entry never expires". Parenthesised so it still
+    // compiles when <windows.h> has defined a max() macro, which happens unless
+    // the including translation unit defines NOMINMAX first.
+    static constexpr time_point never() noexcept { return (time_point::max)(); }
+
     // Never reads the clock when there is no TTL, which keeps the no-TTL path
     // exactly as cheap as it was before TTL existed.
     static time_point expiry_from(const std::optional<duration>& ttl) {
         if (!ttl) {
-            return time_point::max();
+            return never();
         }
         validate_ttl(ttl);
         const time_point now = Clock::now();
-        if (*ttl >= time_point::max() - now) {
-            return time_point::max();  // saturate instead of overflowing
+        if (*ttl >= never() - now) {
+            return never();  // saturate instead of overflowing
         }
         return now + *ttl;
     }
 
-    static bool never_expires(time_point expiry) noexcept { return expiry == time_point::max(); }
+    static bool never_expires(time_point expiry) noexcept { return expiry == never(); }
 
     static bool is_expired_at(const Node* node, time_point now) noexcept {
         return !never_expires(node->expires_at) && node->expires_at <= now;

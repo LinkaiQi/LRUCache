@@ -24,16 +24,28 @@ if (auto name = cache.get("user:42")) {
 * **Atomic compound operations**: `insert_if_absent`, `get_or_compute`
 * **Optional TTL**: per-cache default, per-entry override, injectable clock
 * **No hidden threads** and no allocations on the hot path
-* **Tested**: 85 tests, ~27k assertions, ASan + UBSan + TSan + leak-checked in CI
+* **Tested**: 89 tests, ~27k assertions, ASan + UBSan + TSan + leak-checked in CI
 
 ## Try it in 30 seconds
+
+Linux and macOS:
 
 ```sh
 git clone https://github.com/LinkaiQi/LRUCache && cd LRUCache
 make run
 ```
 
-`make run` opens an interactive shell so you can play with the cache without
+Windows, where `make` is not available, so build with CMake instead:
+
+```powershell
+git clone https://github.com/LinkaiQi/LRUCache
+cd LRUCache
+cmake -S . -B build
+cmake --build build --config Release
+.\build\Release\cache_shell.exe
+```
+
+Either way you get an interactive shell, so you can play with the cache without
 writing any code:
 
 ```
@@ -55,8 +67,12 @@ It reads piped input too, which makes it easy to script:
 printf 'put session abc 50\nhas session\nstats\n' | ./build/cache_shell 100
 ```
 
-Run `./build/cache_shell <capacity> <default_ttl_ms>` to configure it, and
-`help` inside the shell for the full command list.
+```powershell
+"put session abc 50", "has session", "stats" | .\build\Release\cache_shell.exe 100
+```
+
+Pass `<capacity> <default_ttl_ms>` to configure the cache, and type `help`
+inside the shell for the full command list.
 
 ## Installing
 
@@ -277,6 +293,8 @@ your own hardware rather than trusting this table.
 
 ## Building
 
+The Makefile is the quickest route on Linux and macOS.
+
 ```sh
 make test      # build and run every test suite
 make run       # interactive cache shell
@@ -290,12 +308,37 @@ make check     # everything CI runs
 make help      # this list
 ```
 
+CMake works everywhere, and is the only option on Windows because the Makefile
+relies on a POSIX shell.
+
+```sh
+cmake -S . -B build
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
 Everything compiles clean under `-Wall -Wextra -Wpedantic -Wshadow -Wconversion
--Wsign-conversion -Wold-style-cast -Werror`.
+-Wsign-conversion -Wold-style-cast -Werror` with GCC and Clang, and under
+`/W4 /WX /permissive-` with MSVC.
+
+## Supported platforms
+
+Every push is built and tested on Linux, macOS and Windows.
+
+| Platform | Compiler | Covered by CI |
+|---|---|---|
+| Linux | GCC or Clang | build, tests, ASan, UBSan, TSan, leak check |
+| macOS | AppleClang | build, tests, ASan, UBSan, TSan, leak check |
+| Windows | MSVC | build and tests through CMake and CTest |
+
+The headers include a regression test for the `min` and `max` macros that
+`<windows.h>` defines unless `NOMINMAX` is set, so including this library after
+`<windows.h>` compiles cleanly. That test runs on every platform.
 
 ## Tests
 
-Self-contained, with no test framework to install.
+Self-contained, with no test framework to install. 89 tests, about 27,000
+assertions.
 
 `tests/conformance.hpp` holds the behaviour every cache in this repository must
 exhibit, written against the smallest common API. Both versions are registered
