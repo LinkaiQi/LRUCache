@@ -1,13 +1,14 @@
-// Tests for the classic cache: the shared conformance suite plus tests for the
-// LinkedList building block, which the production version does not have.
+// The classic cache and its LinkedList building block, which the production
+// version does not have.
+//
+// The behaviour it shares with the production cache is checked by
+// test_lru_cache_conformance.cpp, which runs one suite against both.
 
 #include <lru/lru_cache_classic.hpp>
 
-#include "conformance.hpp"
 #include "test_harness.hpp"
 
 #include <cstddef>
-#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -149,24 +150,6 @@ TEST(destructor_frees_remaining_nodes) {
 // LRUCache
 // ---------------------------------------------------------------------------
 
-TEST(non_positive_size_is_rejected) {
-    bool threw_on_zero = false;
-    try {
-        LRUCache cache(0);
-    } catch (const std::invalid_argument&) {
-        threw_on_zero = true;
-    }
-    CHECK(threw_on_zero);
-
-    bool threw_on_negative = false;
-    try {
-        LRUCache cache(-1);
-    } catch (const std::invalid_argument&) {
-        threw_on_negative = true;
-    }
-    CHECK(threw_on_negative);
-}
-
 TEST(cache_destructor_frees_its_nodes) {
     LRUCache cache(64);
     for (int i = 0; i < 500; ++i) {
@@ -188,9 +171,4 @@ TEST(large_values_round_trip) {
 
 }  // namespace
 
-int main() {
-    lru_test::register_conformance_tests("classic", [](std::size_t capacity) {
-        return std::make_unique<LRUCache>(static_cast<int>(capacity));
-    });
-    return lru_test::run_all("classic LRUCache");
-}
+int main() { return lru_test::run_all("classic LRUCache"); }

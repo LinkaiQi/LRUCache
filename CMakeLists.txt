@@ -62,9 +62,11 @@ endfunction()
 
 if(LRU_CACHE_BUILD_TESTS)
     enable_testing()
-    foreach(name test_lru_cache test_lru_cache_classic test_lru_cache_ttl
-                 test_min_max_macros test_concurrency)
-        lru_add_executable(${name} tests/${name}.cpp)
+    file(GLOB LRU_TEST_SOURCES CONFIGURE_DEPENDS
+         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_*.cpp)
+    foreach(source ${LRU_TEST_SOURCES})
+        get_filename_component(name ${source} NAME_WE)
+        lru_add_executable(${name} ${source})
         target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
         add_test(NAME ${name} COMMAND ${name})
     endforeach()

@@ -8,6 +8,8 @@
 
 #include <lru/lru_cache.hpp>
 
+#include <chrono>
+
 #include "test_harness.hpp"
 
 #include <atomic>
@@ -304,6 +306,80 @@ TEST(statistics_are_never_lost_under_contention) {
     CHECK_EQ(total, static_cast<std::size_t>(kThreads * kOps));
     CHECK_EQ(stats.hits, static_cast<std::size_t>(kThreads / 2 * kOps));
     CHECK_EQ(stats.misses, static_cast<std::size_t>(kThreads / 2 * kOps));
+}
+
+// ---------------------------------------------------------------------------
+// Atomic operations and TTL under load
+// ---------------------------------------------------------------------------
+
+TEST(insert_if_absent_elects_exactly_one_winner) {
+    // The race insert_if_absent exists to fix: with contains()+put() several
+    // threads would each believe they were first.
+    lru::LRUCache<int, int> cache(256);
+    constexpr int kThreads = 8;
+    constexpr int kKeys = 200;
+
+    std::vector<std::thread> threads;
+    std::atomic<int> winners{0};
+    threads.reserve(kThreads);
+
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&cache, &winners, t] {
+            for (int key = 0; key < kKeys; ++key) {
+                if (cache.insert_if_absent(key, t)) {
+                    ++winners;
+                }
+            }
+        });
+    }
+    for (std::thread& thread : threads) {
+        thread.join();
+    }
+
+    // Capacity is larger than the key space, so nothing is evicted and exactly
+    // one thread can have won each key.
+    CHECK_EQ(winners.load(), kKeys);
+}
+
+TEST(concurrent_ttl_traffic_is_safe) {
+    lru::LRUCache<int, std::string> cache(64, std::chrono::milliseconds(2));
+    constexpr int kThreads = 8;
+    constexpr int kOpsPerThread = 3000;
+
+    std::vector<std::thread> threads;
+    std::atomic<bool> corrupted{false};
+    threads.reserve(kThreads);
+
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&cache, &corrupted, t] {
+            for (int i = 0; i < kOpsPerThread; ++i) {
+                const int key = (i * 7 + t) % 128;
+                const std::string expected = "value-" + std::to_string(key);
+                switch (i % 4) {
+                    case 0:
+                        cache.put(key, expected);
+                        break;
+                    case 1:
+                        if (auto value = cache.get(key); value && *value != expected) {
+                            corrupted = true;
+                        }
+                        break;
+                    case 2:
+                        cache.insert_if_absent(key, expected);
+                        break;
+                    default:
+                        cache.purge_expired();
+                        break;
+                }
+            }
+        });
+    }
+    for (std::thread& thread : threads) {
+        thread.join();
+    }
+
+    CHECK(!corrupted.load());
+    CHECK(cache.size() <= std::size_t{64});
 }
 
 }  // namespace

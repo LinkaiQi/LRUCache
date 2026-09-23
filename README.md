@@ -24,7 +24,7 @@ if (auto name = cache.get("user:42")) {
 * **Atomic compound operations**: `insert_if_absent`, `get_or_compute`
 * **Optional TTL**: per-cache default, per-entry override, injectable clock
 * **No hidden threads** and no allocations on the hot path
-* **Tested**: 97 tests, ~27k assertions, ASan + UBSan + TSan + leak-checked in CI
+* **Tested**: 105 tests, ~27k assertions, ASan + UBSan + TSan + leak-checked in CI
 
 ## Try it in 30 seconds
 
@@ -337,36 +337,51 @@ The headers include a regression test for the `min` and `max` macros that
 
 ## Tests
 
-Self-contained, with no test framework to install. 97 tests, about 27,000
-assertions.
+Self-contained, with no test framework to install. 105 tests and about 27,500
+assertions, split one binary per concern.
 
-`tests/conformance.hpp` holds the behaviour every cache in this repository must
-exhibit, written against the smallest common API. Both versions are registered
-against it. Two entries are worth calling out:
+| Suite | Covers |
+|---|---|
+| `test_lru_cache_basics.cpp` | reading, writing, recency, eviction |
+| `test_lru_cache_removal.cpp` | erase at head, tail, middle and only entry, and clear |
+| `test_lru_cache_atomic_ops.cpp` | `insert_if_absent` and `get_or_compute` |
+| `test_lru_cache_ttl.cpp` | expiry, per-entry overrides, purging |
+| `test_lru_cache_stats.cpp` | hit, miss, eviction and expiration counters |
+| `test_lru_cache_value_semantics.cpp` | what gets copied, moved and destroyed, and moving the cache |
+| `test_lru_cache_error_handling.cpp` | rejected arguments and exception safety |
+| `test_lru_cache_concurrency.cpp` | everything under threads |
+| `test_lru_cache_portability.cpp` | the `min` and `max` macros from `<windows.h>` |
+| `test_lru_cache_conformance.cpp` | the shared suite, run against both caches |
+| `test_lru_cache_classic.cpp` | the classic cache and its `LinkedList` |
 
-* **`randomized_operations_match_reference_model`** runs 20,000 random
-  put/get operations against a deliberately naive vector-based LRU and asserts
-  every returned value matches. This catches subtly wrong pointer updates that
-  hand-written examples miss.
-* **`concurrent_access_is_safe`** hammers the cache from 8 threads under
-  ThreadSanitizer.
+Three are worth calling out.
 
-`tests/test_concurrency.cpp` goes further. Workers are released through a start
-gate so the operations genuinely overlap rather than the first thread finishing
-before the last one starts. It covers racing `get_or_compute` calls on one key,
-which must all agree on a single value, factories that re-enter the cache from
-many threads at once, `erase` and `clear` running against live readers and
-writers, a hot key set that keeps `move_to_front` reordering the list, and
-statistics that have to add up exactly across threads.
+**`test_lru_cache_conformance.cpp`** runs one suite against both caches, which
+is what guarantees they are observably identical rather than merely similar. It
+includes `randomized_operations_match_reference_model`, 20,000 random operations
+diffed against a deliberately naive vector-based LRU, which catches the subtly
+wrong pointer update that hand-written examples miss.
 
-These tests were checked against a deliberately broken build with the lock
-removed from `get()`. ThreadSanitizer reported the race immediately, so the
-suite fails when the locking is wrong rather than passing by luck.
+**`test_lru_cache_concurrency.cpp`** releases its workers through a start gate so
+the operations genuinely overlap instead of the first thread finishing before
+the last one starts. It covers racing `get_or_compute` calls on a single key,
+factories that re-enter the cache, `erase` and `clear` running against live
+traffic, a hot key set that keeps `move_to_front` reordering the list, and
+counters that have to add up exactly.
 
-On top of that: TTL expiry driven by a manual clock (deterministic, no sleeps),
-`LinkedList` unit tests covering every insert and removal position, move
-semantics, value copy/move/destruction accounting, and a packaging job that
-installs the library and consumes it from a separate project.
+**`test_lru_cache_error_handling.cpp`** turns the documented exception guarantee
+into something testable. A `ThrowingValue` throws from whichever copy or move a
+countdown lands on, so the trip point walks through every step of an insert,
+including the node recycling path taken when the cache is full. After each one
+the suite checks that the map and the list still agree, that no key ended up
+holding another key's value, that the cache still works, and that no value
+instance leaked.
+
+The concurrency and error handling suites were both validated against
+deliberately broken builds. Removing the lock from `get()` produces an immediate
+ThreadSanitizer race report, and removing the `delete` from the recycling catch
+block makes the leak check fail. They fail when the code is wrong rather than
+passing by luck.
 
 ## Layout
 
@@ -376,7 +391,7 @@ installs the library and consumes it from a separate project.
 | `include/lru/lru_cache_classic.hpp` | the classic, readable version |
 | `include/lru/version.hpp` | version macros and `lru::Version` |
 | `examples/` | quickstart, TTL walkthrough, interactive shell |
-| `tests/` | conformance suite, harness, per-version, TTL, concurrency and macro suites |
+| `tests/` | one suite per concern, plus the shared harness and conformance suite |
 | `benchmarks/` | comparison benchmark |
 | `cmake/` | package config template |
 
