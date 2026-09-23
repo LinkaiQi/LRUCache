@@ -72,14 +72,16 @@ make run
 ```
 
 ```
-lru> put a 1
+lru> put user:42 Ada            # put <key> <value> [ttl_ms]
 OK
-lru> get a
-1
-lru> put session token 50     # optional trailing TTL, in milliseconds
+lru> get user:42
+Ada
+lru> put otp:42 123456 50       # this entry expires 50 milliseconds from now
 OK
+lru> get otp:42                 # asked again a moment later, it is gone
+(nil)
 lru> stats
-hits=1 misses=0 evictions=0 expirations=0
+hits=1 misses=1 evictions=0 expirations=1
 ```
 
 Type `help` inside the shell for the full command list. On Windows, where `make`
